@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1F3864">
+<meta http-equiv="Permissions-Policy" content="microphone=*">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Arial;background:#f0f2f5;height:100vh;display:flex;justify-content:center}
+.container{width:100%;max-width:600px;height:100vh;display:flex;flex-direction:column;background:#fff}
+.header{background:#1F3864;color:#fff;padding:14px 20px;font-size:17px;font-weight:bold}
+.chat{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px;background:#f5f5f5}
+.msg{max-width:85%;padding:12px 16px;border-radius:16px;font-size:14px;line-height:1.5}
+.msg.bot{background:#fff;border:1px solid #e0e0e0;align-self:flex-start}
+.msg.user{background:#1F3864;color:#fff;align-self:flex-end}
+.msg.success{background:#E8F5E9;border:1px solid #81C784;align-self:flex-start}
+.msg.error{background:#FFEBEE;border:1px solid #EF9A9A;align-self:flex-start}
+.confirm-btns{margin-top:10px;display:flex;gap:8px;flex-wrap:wrap}
+.confirm-btns button{padding:8px 18px;border:none;border-radius:6px;cursor:pointer;font-weight:bold}
+.confirm-btns .yes{background:#2E7D32;color:#fff}
+.confirm-btns .no{background:#C62828;color:#fff}
+.confirm-btns .edit{background:#1565C0;color:#fff}
+.input-bar{display:flex;gap:8px;padding:12px 16px;background:#fff;border-top:1px solid #e0e0e0}
+.input-bar input{flex:1;padding:12px 16px;border:1px solid #ddd;border-radius:24px;font-size:14px;outline:none}
+.send-btn{width:48px;height:48px;border-radius:50%;border:none;background:#1F3864;color:#fff;cursor:pointer;font-size:20px}
+.typing{padding:12px 16px;color:#888;background:#fff;border-radius:16px;border:1px solid #e0e0e0;align-self:flex-start}
+#splash{position:fixed;top:0;left:0;right:0;bottom:0;background:#1F3864;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:100;cursor:pointer}
+.mic-circle{width:120px;height:120px;border-radius:50%;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:50px;color:#fff}
+.mic-circle.listening{background:rgba(198,40,40,0.8);animation:pulse 1s infinite}
+.status{color:rgba(255,255,255,0.8);font-size:16px;margin-top:20px}
+.title{color:#fff;font-size:22px;font-weight:bold;margin-bottom:30px}
+.tap-hint{color:rgba(255,255,255,0.5);font-size:13px;margin-top:12px}
+#mainUI{display:none}
+@keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.08)}}
+</style>
+</head>
+<body>
+<div id="splash" onclick="splashTap()">
+  <div class="title">Xpand Assistant</div>
+  <div class="mic-circle" id="splashMic">&#127908;</div>
+  <div class="status" id="splashStatus">Initializing...</div>
+  <div class="tap-hint" id="tapHint"></div>
+</div>
+<div id="mainUI">
+  <div class="container">
+    <div class="header">&#9670; Xpand Assistant</div>
+    <div class="chat" id="chat"></div>
+    <div class="input-bar">
+      <button class="send-btn" id="micBtn" onclick="toggleMic()">&#127908;</button>
+      <input type="text" id="textInput" placeholder="Type or tap mic..." onkeydown="if(event.key==='Enter')sendMsg()">
+      <button class="send-btn" onclick="sendMsg()">&#9654;</button>
+    </div>
+  </div>
+</div>
+<script>
+// Apps Script Web App URL — all API calls go here
+var API_URL = "https://script.google.com/a/macros/xpandnetwork.com/s/AKfycbzGiYKRz-ecVB8nbNWWC43iFclXI9y2Izv2fWHAyCMFgplxmqu6-TrV4mnXRLZVDWNXxQ/exec";
+
+var hist = [];
+var pendingData = null;
+var recognition = null;
+var isListening = false;
+var splashActive = true;
+
+function addMsg(t, c) {
+  var ch = document.getElementById("chat");
+  var d = document.createElement("div");
+  d.className = "msg " + c;
+  d.innerHTML = t;
+  ch.appendChild(d);
+  ch.scrollTop = ch.scrollHeight;
+}
+
+function showTyping() {
+  var d = document.createElement("div");
+  d.className = "typing";
+  d.id = "typing";
+  d.textContent = "Thinking...";
+  document.getElementById("chat").appendChild(d);
+  document.getElementById("chat").scrollTop = 99999;
+}
+
+function hideTyping() {
+  var t = document.getElementById("typing");
+  if (t) t.remove();
+}
+
+function initSpeech() {
+  if (!("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window)) {
+    document.getElementById("splashStatus").textContent = "Speech not supported";
+    document.getElementById("tapHint").textContent = "Tap anywhere to type instead";
+    return false;
+  }
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  recognition = new SR();
+  recognition.continuous = false;
+  recognition.interimResults = false;
+  recognition.lang = "en-US";
+
+  recognition.onresult = function(e) {
+    var t = e.results[0][0].transcript;
+    if (splashActive) exitSplash();
+    document.getElementById("textInput").value = t;
+    sendMsg();
+  };
+
+  recognition.onend = function() {
+    isListening = false;
+    document.getElementById("micBtn").style.background = "#1F3864";
+    if (splashActive) {
+      document.getElementById("splashMic").className = "mic-circle";
+      document.getElementById("splashStatus").textContent = "Tap to speak";
+    }
+  };
+
+  recognition.onerror = function(e) {
+    isListening = false;
+    document.getElementById("micBtn").style.background = "#1F3864";
+    if (splashActive) {
+      document.getElementById("splashMic").className = "mic-circle";
+      if (e.error === "not-allowed") {
+        document.getElementById("splashStatus").textContent = "Mic blocked - tap to try again";
+        document.getElementById("tapHint").textContent = "Grant mic permission when prompted";
+      } else {
+        document.getElementById("splashStatus").textContent = "Tap to speak";
+      }
+    } else if (e.error !== "aborted") {
+      addMsg("Mic error: " + e.error + ". Try typing.", "error");
+    }
+  };
+  return true;
+}
+
+function startListening() {
+  if (!recognition || isListening) return;
+  isListening = true;
+  if (splashActive) {
+    document.getElementById("splashMic").className = "mic-circle listening";
+    document.getElementById("splashStatus").textContent = "Listening...";
+  } else {
+    document.getElementById("micBtn").style.background = "#C62828";
+  }
+  recognition.start();
+}
+
+function splashTap() {
+  if (!recognition) { exitSplash(); return; }
+  if (isListening) { recognition.stop(); return; }
+  startListening();
+}
+
+function exitSplash() {
+  splashActive = false;
+  document.getElementById("splash").style.display = "none";
+  document.getElementById("mainUI").style.display = "block";
+  addMsg("Hi! Tap the mic or type to add items to the Xpand tracker or meeting agenda.", "bot");
+}
+
+function toggleMic() {
+  if (!recognition) {
+    addMsg("Speech not supported. Use Chrome or Edge, or type your request.", "error");
+    return;
+  }
+  if (isListening) { recognition.stop(); return; }
+  startListening();
+}
+
+function sendMsg() {
+  var input = document.getElementById("textInput");
+  var text = input.value.trim();
+  if (!text) return;
+  input.value = "";
+  addMsg(text, "user");
+  hist.push({role: "user", content: text});
+  showTyping();
+
+  fetch(API_URL, {
+    method: "POST",
+    headers: {"Content-Type": "text/plain;charset=utf-8"},
+    body: JSON.stringify({action: "processVoice", history: JSON.stringify(hist)})
+  })
+  .then(function(resp) { return resp.text(); })
+  .then(function(text) {
+    // Apps Script may wrap response in HTML — extract JSON if needed
+    var jsonStr = text;
+    try {
+      // If response is JSON directly
+      JSON.parse(jsonStr);
+    } catch(e) {
+      // Try to extract JSON from potential HTML wrapper
+      var match = text.match(/\{[\s\S]*\}/);
+      if (match) jsonStr = match[0];
+    }
+    handleResponse(jsonStr);
+  })
+  .catch(function(e) {
+    hideTyping();
+    addMsg("Error: " + e.message, "error");
+  });
+}
+
+function handleResponse(r) {
+  hideTyping();
+  var data;
+  try { data = JSON.parse(r); } catch(e) { addMsg(r, "bot"); return; }
+  hist.push({role: "assistant", content: data.message || r});
+  if (data.ready) {
+    pendingData = data;
+    var s = "<strong>Ready to submit:</strong><br>";
+    s += "<strong>Type:</strong> " + data.type + "<br>";
+    s += "<strong>Description:</strong> " + data.desc + "<br>";
+    s += "<strong>Owner:</strong> " + data.owner + "<br>";
+    if (data.type !== "Add Meeting Agenda Item") {
+      s += "<strong>Priority:</strong> " + data.priority + "<br>";
+      s += "<strong>Due:</strong> " + data.due + "<br>";
+    }
+    if (data.notes) s += "<strong>Notes:</strong> " + data.notes + "<br>";
+    s += '<div class="confirm-btns">';
+    s += '<button class="yes" onclick="confirmSubmit()">Submit</button>';
+    s += '<button class="edit" onclick="editItem()">Edit</button>';
+    s += '<button class="no" onclick="cancelItem()">Cancel</button>';
+    s += '</div>';
+    addMsg(s, "bot");
+  } else {
+    addMsg(data.message || data.question || r, "bot");
+  }
+}
+
+function confirmSubmit() {
+  if (!pendingData) return;
+  showTyping();
+
+  fetch(API_URL, {
+    method: "POST",
+    headers: {"Content-Type": "text/plain;charset=utf-8"},
+    body: JSON.stringify({action: "submitItem", data: pendingData})
+  })
+  .then(function(resp) { return resp.text(); })
+  .then(function(text) {
+    hideTyping();
+    var result;
+    try { result = JSON.parse(text); } catch(e) { result = {id: text}; }
+    var id = result.id || text;
+    var isAgenda = String(id).indexOf("AGENDA") === 0;
+    var msg = isAgenda ? "Agenda item submitted!" : "Added <strong>" + id + "</strong> to the tracker.";
+    addMsg(msg, "success");
+    pendingData = null;
+    hist = [];
+    addMsg("What else would you like to add?", "bot");
+  })
+  .catch(function(e) {
+    hideTyping();
+    addMsg("Error: " + e.message, "error");
+  });
+}
+
+function editItem() {
+  pendingData = null;
+  addMsg("What would you like to change?", "bot");
+}
+
+function cancelItem() {
+  pendingData = null;
+  hist = [];
+  addMsg("Cancelled. What else can I help with?", "bot");
+}
+
+initSpeech();
+exitSplash();
+</script>
+</body>
+</html>
