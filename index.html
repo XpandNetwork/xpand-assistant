@@ -167,6 +167,35 @@ function toggleMic() {
   startListening();
 }
 
+function callApi(params) {
+  return new Promise(function(resolve, reject) {
+    var url = API_URL + "?" + Object.keys(params).map(function(k) {
+      return encodeURIComponent(k) + "=" + encodeURIComponent(params[k]);
+    }).join("&");
+
+    // Use a hidden iframe + script injection to avoid CORS
+    // Apps Script GET requests redirect, so we use JSONP-style callback
+    var callbackName = "cb_" + Date.now();
+    window[callbackName] = function(data) {
+      resolve(data);
+      delete window[callbackName];
+      if (script.parentNode) script.parentNode.removeChild(script);
+    };
+
+    // Fallback: use fetch with redirect follow
+    fetch(url, {redirect: "follow"})
+      .then(function(resp) { return resp.text(); })
+      .then(function(text) {
+        delete window[callbackName];
+        resolve(text);
+      })
+      .catch(function(err) {
+        delete window[callbackName];
+        reject(err);
+      });
+  });
+}
+
 function sendMsg() {
   var input = document.getElementById("textInput");
   var text = input.value.trim();
@@ -176,20 +205,12 @@ function sendMsg() {
   hist.push({role: "user", content: text});
   showTyping();
 
-  fetch(API_URL, {
-    method: "POST",
-    headers: {"Content-Type": "text/plain;charset=utf-8"},
-    body: JSON.stringify({action: "processVoice", history: JSON.stringify(hist)})
-  })
-  .then(function(resp) { return resp.text(); })
+  callApi({action: "processVoice", history: JSON.stringify(hist)})
   .then(function(text) {
-    // Apps Script may wrap response in HTML — extract JSON if needed
     var jsonStr = text;
     try {
-      // If response is JSON directly
       JSON.parse(jsonStr);
     } catch(e) {
-      // Try to extract JSON from potential HTML wrapper
       var match = text.match(/\{[\s\S]*\}/);
       if (match) jsonStr = match[0];
     }
@@ -232,12 +253,7 @@ function confirmSubmit() {
   if (!pendingData) return;
   showTyping();
 
-  fetch(API_URL, {
-    method: "POST",
-    headers: {"Content-Type": "text/plain;charset=utf-8"},
-    body: JSON.stringify({action: "submitItem", data: pendingData})
-  })
-  .then(function(resp) { return resp.text(); })
+  callApi({action: "submitItem", data: JSON.stringify(pendingData)})
   .then(function(text) {
     hideTyping();
     var result;
